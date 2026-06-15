@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HF Model Stats — Top 1K LLMs by Downloads</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #fafafa; color: #1a1a2e; line-height: 1.6; }
+.container { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+header { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); color: #fff; padding: 48px 0 36px; }
+header h1 { font-size: 2rem; font-weight: 700; }
+header p { margin-top: 8px; color: #a0aec0; font-size: 0.95rem; }
+.meta-bar { background: #e2e8f0; padding: 12px 0; font-size: 0.85rem; color: #4a5568; }
+.meta-bar span { margin-right: 24px; }
+section { padding: 36px 0 24px; }
+section h2 { font-size: 1.4rem; font-weight: 600; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 2px solid #e2e8f0; }
+section p.desc { color: #718096; font-size: 0.9rem; margin-bottom: 16px; }
+.chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px; }
+.chart-box { background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); padding: 16px; }
+.chart-box h3 { font-size: 1rem; font-weight: 600; margin-bottom: 8px; color: #2d3748; }
+.chart-full { grid-column: 1 / -1; }
+footer { background: #1a1a2e; color: #a0aec0; padding: 24px 0; font-size: 0.85rem; text-align: center; margin-top: 24px; }
+footer a { color: #63b3ed; }
+@media (max-width: 768px) { .chart-row { grid-template-columns: 1fr; } header h1 { font-size: 1.5rem; } }
+#loading { text-align: center; padding: 80px 0; font-size: 1.2rem; color: #718096; }
+</style>
+</head>
+<body>
+
+<header>
+<div class="container">
+  <h1>HF Model Stats</h1>
+  <p>Top 1,000 LLMs on Hugging Face Hub, ranked by all-time downloads</p>
+</div>
+</header>
+
+<div class="meta-bar">
+<div class="container">
+  <span>Data last updated: <strong id="last-updated">loading...</strong></span>
+  <span>Models tracked: <strong id="model-count">—</strong></span>
+</div>
+</div>
+
+<div id="loading">Loading data...</div>
+
+<main class="container" style="display:none" id="main-content">
+
+<section>
+  <h2>Downloads Leaderboard</h2>
+  <p class="desc">Top models by cumulative all-time downloads and recent 30-day activity.</p>
+  <div class="chart-row">
+    <div class="chart-box"><h3>Top 50 — All-Time Downloads</h3><div id="chart-top-alltime"></div></div>
+    <div class="chart-box"><h3>Top 50 — Recent (30-day) Downloads</h3><div id="chart-top-recent"></div></div>
+  </div>
+</section>
+
+<section>
+  <h2>Entity / Organization Analysis</h2>
+  <p class="desc">Who builds the most-downloaded LLMs? Grouped by organization or author.</p>
+  <div class="chart-row">
+    <div class="chart-box chart-full"><h3>Top 30 Entities by Total Downloads</h3><div id="chart-entity-downloads"></div></div>
+  </div>
+  <div class="chart-row">
+    <div class="chart-box"><h3>Top 30 Entities by Model Count</h3><div id="chart-entity-count"></div></div>
+    <div class="chart-box"><h3>Entity Market Share (Treemap)</h3><div id="chart-entity-treemap"></div></div>
+  </div>
+</section>
+
+<section>
+  <h2>Model Size Distribution</h2>
+  <p class="desc">How downloads distribute across parameter count buckets.</p>
+  <div class="chart-row">
+    <div class="chart-box"><h3>Total Downloads by Size</h3><div id="chart-size-downloads"></div></div>
+    <div class="chart-box"><h3>Model Count by Size</h3><div id="chart-size-count"></div></div>
+  </div>
+  <div class="chart-row">
+    <div class="chart-box chart-full"><h3>Parameter Count vs Downloads</h3><div id="chart-scatter"></div></div>
+  </div>
+</section>
+
+<section>
+  <h2>Timeline</h2>
+  <p class="desc">When were these models created?</p>
+  <div class="chart-row">
+    <div class="chart-box chart-full"><h3>Models Created Over Time</h3><div id="chart-timeline"></div></div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+<div class="container">
+  Data sourced from the <a href="https://huggingface.co/models?sort=downloads" target="_blank">Hugging Face Hub API</a>.
+  Updated weekly via GitHub Actions.
+  <a href="https://github.com" target="_blank">View source</a>.
+</div>
+</footer>
+
+<script>
+const PLOTLY_CONFIG = { responsive: true, displayModeBar: true, displaylogo: false };
+const SIZE_ORDER = ['<1B', '1-3B', '3-7B', '7-13B', '13-70B', '70B+', 'Unknown'];
+const SIZE_COLORS = {
+  '<1B': '#63b3ed', '1-3B': '#4fd1c5', '3-7B': '#68d391',
+  '7-13B': '#f6e05e', '13-70B': '#fc8181', '70B+': '#b794f4', 'Unknown': '#cbd5e0'
+};
+
+function formatNum(n) {
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+  return n.toString();
+}
+
+function groupBy(arr, keyFn) {
+  const groups = {};
+  for (const item of arr) {
+    const k = keyFn(item);
+    (groups[k] = groups[k] || []).push(item);
+  }
+  return groups;
+}
+
+function topModelBarChart(models, divId, field, n) {
+  const top = models.slice().sort((a, b) => b[field] - a[field]).slice(0, n);
+  top.reverse();
+
+  const topAuthors = [...new Set(top.map(m => m.author))];
+  const palette = ['#4299e1','#ed8936','#48bb78','#ed64a6','#9f7aea',
+                    '#38b2ac','#e53e3e','#d69e2e','#667eea','#f56565',
+                    '#4fd1c5','#fc8181','#b794f4','#63b3ed','#68d391'];
+  const colorMap = {};
+  topAuthors.forEach((a, i) => { colorMap[a] = palette[i % palette.length]; });
+
+  const trace = {
+    type: 'bar', orientation: 'h',
+    y: top.map(m => m.id.length > 45 ? m.id.slice(0, 42) + '...' : m.id),
+    x: top.map(m => m[field]),
+    marker: { color: top.map(m => colorMap[m.author]) },
+    text: top.map(m => formatNum(m[field])),
+    textposition: 'outside',
+    hovertemplate: top.map(m =>
+      `<b>${m.id}</b><br>` +
+      `${field === 'downloads_all_time' ? 'All-time' : 'Recent'}: ${m[field].toLocaleString()}<br>` +
+      `Params: ${m.param_count ? formatNum(m.param_count) : 'Unknown'}<br>` +
+      `Likes: ${m.likes.toLocaleString()}<extra></extra>`
+    ),
+  };
+
+  const layout = {
+    height: Math.max(700, n * 18),
+    margin: { l: 280, r: 80, t: 10, b: 40 },
+    xaxis: { title: field === 'downloads_all_time' ? 'All-Time Downloads' : 'Recent Downloads' },
+    yaxis: { tickfont: { size: 11 } },
+    paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+  };
+
+  Plotly.newPlot(divId, [trace], layout, PLOTLY_CONFIG);
+}
+
+function entityDownloadsChart(models, divId, n) {
+  const byEntity = groupBy(models, m => m.author);
+  const entityTotals = Object.entries(byEntity).map(([author, ms]) => ({
+    author,
+    total: ms.reduce((s, m) => s + m.downloads_all_time, 0),
+    models: ms.slice().sort((a, b) => b.downloads_all_time - a.downloads_all_time),
+  }));
+  entityTotals.sort((a, b) => b.total - a.total);
+  const topEntities = entityTotals.slice(0, n);
+  topEntities.reverse();
+
+  const MAX_MODELS_PER_ENTITY = 5;
+  const traces = [];
+
+  for (let i = 0; i < MAX_MODELS_PER_ENTITY + 1; i++) {
+    const isOther = i === MAX_MODELS_PER_ENTITY;
+    const y = [], x = [], texts = [], hovers = [];
+
+    for (const e of topEntities) {
+      y.push(e.author);
+      if (isOther) {
+        const otherDl = e.models.slice(MAX_MODELS_PER_ENTITY).reduce((s, m) => s + m.downloads_all_time, 0);
+        const otherCount = Math.max(0, e.models.length - MAX_MODELS_PER_ENTITY);
+        x.push(otherDl);
+        texts.push(otherDl > 0 ? formatNum(otherDl) : '');
+        hovers.push(`<b>${e.author}</b> — ${otherCount} other models<br>${otherDl.toLocaleString()} downloads<extra></extra>`);
+      } else {
+        const m = e.models[i];
+        const dl = m ? m.downloads_all_time : 0;
+        x.push(dl);
+        texts.push(dl > 0 ? formatNum(dl) : '');
+        hovers.push(m
+          ? `<b>${m.id}</b><br>${dl.toLocaleString()} downloads<br>Params: ${m.param_count ? formatNum(m.param_count) : 'Unknown'}<extra></extra>`
+          : '<extra></extra>');
+      }
+    }
+
+    traces.push({
+      type: 'bar', orientation: 'h',
+      name: isOther ? 'Other' : `Model #${i + 1}`,
+      y, x, text: texts, textposition: 'inside',
+      hovertemplate: hovers,
+      marker: { color: isOther ? '#cbd5e0' : ['#4299e1','#ed8936','#48bb78','#ed64a6','#9f7aea'][i] },
+    });
+  }
+
+  const layout = {
+    barmode: 'stack',
+    height: Math.max(600, n * 22),
+    margin: { l: 200, r: 60, t: 10, b: 40 },
+    xaxis: { title: 'All-Time Downloads' },
+    yaxis: { tickfont: { size: 11 } },
+    legend: { orientation: 'h', y: -0.05 },
+    paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+  };
+
+  Plotly.newPlot(divId, traces, layout, PLOTLY_CONFIG);
+}
+
+function entityCountChart(models, divId, n) {
+  const counts = {};
+  for (const m of models) counts[m.author] = (counts[m.author] || 0) + 1;
+  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, n);
+  sorted.reverse();
+
+  const trace = {
+    type: 'bar', orientation: 'h',
+    y: sorted.map(e => e[0]),
+    x: sorted.map(e => e[1]),
+    text: sorted.map(e => e[1].toString()),
+    textposition: 'outside',
+    marker: { color: '#4299e1' },
+    hovertemplate: sorted.map(e => `<b>${e[0]}</b><br>${e[1]} models in top 1K<extra></extra>`),
+  };
+
+  const layout = {
+    height: Math.max(600, n * 22),
+    margin: { l: 200, r: 60, t: 10, b: 40 },
+    xaxis: { title: 'Number of Models in Top 1K' },
+    yaxis: { tickfont: { size: 11 } },
+    paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+  };
+
+  Plotly.newPlot(divId, [trace], layout, PLOTLY_CONFIG);
+}
+
+function entityTreemap(models, divId) {
+  const byEntity = groupBy(models, m => m.author);
+  const entities = Object.entries(byEntity).map(([author, ms]) => ({
+    author,
+    total: ms.reduce((s, m) => s + m.downloads_all_time, 0),
+    count: ms.length,
+  }));
+  entities.sort((a, b) => b.total - a.total);
+  const topN = entities.slice(0, 40);
+
+  const trace = {
+    type: 'treemap',
+    labels: topN.map(e => e.author),
+    parents: topN.map(() => ''),
+    values: topN.map(e => e.total),
+    textinfo: 'label+percent parent',
+    hovertemplate: topN.map(e =>
+      `<b>${e.author}</b><br>${e.total.toLocaleString()} downloads<br>${e.count} models<extra></extra>`
+    ),
+    marker: { colors: topN.map((_, i) => {
+      const hue = (i * 37) % 360;
+      return `hsl(${hue}, 65%, 55%)`;
+    })},
+  };
+
+  const layout = {
+    height: 500,
+    margin: { l: 10, r: 10, t: 10, b: 10 },
+    paper_bgcolor: 'rgba(0,0,0,0)',
+  };
+
+  Plotly.newPlot(divId, [trace], layout, PLOTLY_CONFIG);
+}
+
+function sizeBucketChart(models, divId, mode) {
+  const bucketData = {};
+  for (const b of SIZE_ORDER) bucketData[b] = { downloads: 0, count: 0 };
+  for (const m of models) {
+    const b = m.size_bucket;
+    if (bucketData[b]) {
+      bucketData[b].downloads += m.downloads_all_time;
+      bucketData[b].count += 1;
+    }
+  }
+
+  const vals = SIZE_ORDER.map(b => mode === 'downloads' ? bucketData[b].downloads : bucketData[b].count);
+  const trace = {
+    type: 'bar',
+    x: SIZE_ORDER,
+    y: vals,
+    text: vals.map(v => formatNum(v)),
+    textposition: 'outside',
+    marker: { color: SIZE_ORDER.map(b => SIZE_COLORS[b]) },
+    hovertemplate: SIZE_ORDER.map((b, i) =>
+      `<b>${b}</b><br>${mode === 'downloads' ? 'Downloads' : 'Models'}: ${vals[i].toLocaleString()}<extra></extra>`
+    ),
+  };
+
+  const layout = {
+    height: 400,
+    margin: { l: 60, r: 30, t: 10, b: 60 },
+    xaxis: { title: 'Parameter Count' },
+    yaxis: { title: mode === 'downloads' ? 'All-Time Downloads' : 'Number of Models' },
+    paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+  };
+
+  Plotly.newPlot(divId, [trace], layout, PLOTLY_CONFIG);
+}
+
+function scatterChart(models, divId) {
+  const withParams = models.filter(m => m.param_count && m.param_count > 0);
+
+  const trace = {
+    type: 'scatter', mode: 'markers',
+    x: withParams.map(m => m.param_count),
+    y: withParams.map(m => m.downloads_all_time),
+    marker: {
+      size: withParams.map(m => Math.max(5, Math.min(30, Math.sqrt(m.likes) * 0.5))),
+      color: withParams.map(m => SIZE_COLORS[m.size_bucket] || '#cbd5e0'),
+      opacity: 0.7,
+      line: { width: 0.5, color: '#fff' },
+    },
+    text: withParams.map(m => m.id),
+    hovertemplate: withParams.map(m =>
+      `<b>${m.id}</b><br>` +
+      `Params: ${formatNum(m.param_count)}<br>` +
+      `Downloads: ${m.downloads_all_time.toLocaleString()}<br>` +
+      `Likes: ${m.likes.toLocaleString()}<extra></extra>`
+    ),
+  };
+
+  const layout = {
+    height: 500,
+    margin: { l: 80, r: 30, t: 30, b: 60 },
+    xaxis: { title: 'Parameter Count', type: 'log', tickformat: '.0s' },
+    yaxis: { title: 'All-Time Downloads', type: 'log', tickformat: '.0s' },
+    paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+    updatemenus: [{
+      type: 'buttons', direction: 'left', x: 0.01, y: 1.12,
+      buttons: [
+        { label: 'Log-Log', method: 'relayout', args: [{ 'xaxis.type': 'log', 'yaxis.type': 'log' }] },
+        { label: 'Linear', method: 'relayout', args: [{ 'xaxis.type': 'linear', 'yaxis.type': 'linear' }] },
+      ],
+    }],
+  };
+
+  Plotly.newPlot(divId, [trace], layout, PLOTLY_CONFIG);
+}
+
+function timelineChart(models, divId) {
+  const withDate = models.filter(m => m.created_at);
+  const byBucket = groupBy(withDate, m => m.size_bucket);
+
+  const traces = SIZE_ORDER.filter(b => byBucket[b]).map(bucket => ({
+    type: 'histogram',
+    x: byBucket[bucket].map(m => m.created_at.slice(0, 7)),
+    name: bucket,
+    marker: { color: SIZE_COLORS[bucket] },
+    hovertemplate: `${bucket}<br>%{x}: %{y} models<extra></extra>`,
+  }));
+
+  const layout = {
+    barmode: 'stack',
+    height: 400,
+    margin: { l: 60, r: 30, t: 10, b: 60 },
+    xaxis: { title: 'Created Date (Month)', type: 'category' },
+    yaxis: { title: 'Number of Models' },
+    legend: { orientation: 'h', y: -0.15 },
+    paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+  };
+
+  Plotly.newPlot(divId, traces, layout, PLOTLY_CONFIG);
+}
+
+async function init() {
+  try {
+    const resp = await fetch('data/models.json');
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    const models = data.models;
+
+    document.getElementById('last-updated').textContent =
+      new Date(data.meta.collected_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    document.getElementById('model-count').textContent = models.length.toLocaleString();
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('main-content').style.display = 'block';
+
+    topModelBarChart(models, 'chart-top-alltime', 'downloads_all_time', 50);
+    topModelBarChart(models, 'chart-top-recent', 'downloads', 50);
+    entityDownloadsChart(models, 'chart-entity-downloads', 30);
+    entityCountChart(models, 'chart-entity-count', 30);
+    entityTreemap(models, 'chart-entity-treemap');
+    sizeBucketChart(models, 'chart-size-downloads', 'downloads');
+    sizeBucketChart(models, 'chart-size-count', 'count');
+    scatterChart(models, 'chart-scatter');
+    timelineChart(models, 'chart-timeline');
+  } catch (err) {
+    document.getElementById('loading').textContent = 'Failed to load data: ' + err.message;
+  }
+}
+
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>
